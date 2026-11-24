@@ -1,0 +1,312 @@
+{
+  "schema_version": 1,
+  "complete": true,
+  "config": {
+    "target": "demo-rag",
+    "model_id": "canned-qa-v1",
+    "prompt_version": "prompt-v1",
+    "concurrency": 3,
+    "timeout": "1m0s",
+    "max_retries": 2,
+    "retry_backoff": "250ms",
+    "cache_enabled": true
+  },
+  "overall": {
+    "samples": 7,
+    "succeeded": 6,
+    "failed": 1,
+    "canceled": 0,
+    "not_run": 0,
+    "exact_match_rate": 1,
+    "token_f1": 1,
+    "key_point_coverage": 1,
+    "retrieval_recall": 0.6667,
+    "retrieval_precision": 0.5,
+    "mean_prompt_tokens": 20,
+    "mean_completion_tokens": 11,
+    "mean_total_tokens": 31,
+    "usage_reported_samples": 2,
+    "usage_unknown_samples": 4,
+    "failure_classes": [
+      {
+        "class": "invalid_request",
+        "count": 1
+      }
+    ]
+  },
+  "categories": [
+    {
+      "category": "account",
+      "samples": 2,
+      "succeeded": 2,
+      "failed": 0,
+      "canceled": 0,
+      "not_run": 0,
+      "exact_match_rate": 1,
+      "token_f1": 1,
+      "key_point_coverage": 1,
+      "retrieval_recall": 0.5,
+      "retrieval_precision": 0.25,
+      "mean_prompt_tokens": 21,
+      "mean_completion_tokens": 12,
+      "mean_total_tokens": 33,
+      "usage_reported_samples": 1,
+      "usage_unknown_samples": 1,
+      "failure_classes": []
+    },
+    {
+      "category": "billing",
+      "samples": 2,
+      "succeeded": 1,
+      "failed": 1,
+      "canceled": 0,
+      "not_run": 0,
+      "exact_match_rate": 1,
+      "token_f1": 1,
+      "key_point_coverage": 1,
+      "retrieval_recall": null,
+      "retrieval_precision": null,
+      "mean_prompt_tokens": 19,
+      "mean_completion_tokens": 10,
+      "mean_total_tokens": 29,
+      "usage_reported_samples": 1,
+      "usage_unknown_samples": 0,
+      "failure_classes": [
+        {
+          "class": "invalid_request",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "data",
+      "samples": 1,
+      "succeeded": 1,
+      "failed": 0,
+      "canceled": 0,
+      "not_run": 0,
+      "exact_match_rate": 1,
+      "token_f1": 1,
+      "key_point_coverage": 1,
+      "retrieval_recall": 1,
+      "retrieval_precision": 1,
+      "mean_prompt_tokens": null,
+      "mean_completion_tokens": null,
+      "mean_total_tokens": null,
+      "usage_reported_samples": 0,
+      "usage_unknown_samples": 1,
+      "failure_classes": []
+    },
+    {
+      "category": "localization",
+      "samples": 1,
+      "succeeded": 1,
+      "failed": 0,
+      "canceled": 0,
+      "not_run": 0,
+      "exact_match_rate": 1,
+      "token_f1": 1,
+      "key_point_coverage": 1,
+      "retrieval_recall": null,
+      "retrieval_precision": null,
+      "mean_prompt_tokens": null,
+      "mean_completion_tokens": null,
+      "mean_total_tokens": null,
+      "usage_reported_samples": 0,
+      "usage_unknown_samples": 1,
+      "failure_classes": []
+    },
+    {
+      "category": "support",
+      "samples": 1,
+      "succeeded": 1,
+      "failed": 0,
+      "canceled": 0,
+      "not_run": 0,
+      "exact_match_rate": 1,
+      "token_f1": 1,
+      "key_point_coverage": 1,
+      "retrieval_recall": null,
+      "retrieval_precision": null,
+      "mean_prompt_tokens": null,
+      "mean_completion_tokens": null,
+      "mean_total_tokens": null,
+      "usage_reported_samples": 0,
+      "usage_unknown_samples": 1,
+      "failure_classes": []
+    }
+  ],
+  "samples": [
+    {
+      "id": "acct-01",
+      "category": "account",
+      "question": "How do I reset my password?",
+      "reference_answer": "Open Settings, choose Security, and click Reset password.",
+      "status": "succeeded",
+      "answer": "Open Settings, choose Security, and click Reset password.",
+      "stop_reason": "stop",
+      "usage": {
+        "prompt_tokens": 21,
+        "completion_tokens": 12,
+        "total_tokens": 33
+      },
+      "metrics": {
+        "exact_match": true,
+        "token_f1": 1,
+        "key_point_coverage": 1,
+        "retrieval": {
+          "recall": 1,
+          "precision": 0.5,
+          "matched_reference_materials": 1,
+          "reference_materials": 1,
+          "retrieved_documents": 2
+        }
+      },
+      "attempts": 1,
+      "cache_hit": false
+    },
+    {
+      "id": "acct-02",
+      "category": "account",
+      "question": "Which plans include SSO?",
+      "reference_answer": "SSO is included in the Enterprise plan only.",
+      "status": "succeeded",
+      "answer": "SSO is included in the Enterprise plan only.",
+      "stop_reason": "stop",
+      "usage": {
+        "prompt_tokens": null,
+        "completion_tokens": null,
+        "total_tokens": null
+      },
+      "metrics": {
+        "exact_match": true,
+        "token_f1": 1,
+        "key_point_coverage": 1,
+        "retrieval": {
+          "recall": 0,
+          "precision": 0,
+          "matched_reference_materials": 0,
+          "reference_materials": 1,
+          "retrieved_documents": 1
+        }
+      },
+      "attempts": 1,
+      "cache_hit": false
+    },
+    {
+      "id": "bill-01",
+      "category": "billing",
+      "question": "What is the refund window?",
+      "reference_answer": "Refunds are available within 30 days of purchase.",
+      "status": "succeeded",
+      "answer": "Refunds are available within 30 days of purchase.",
+      "stop_reason": "stop",
+      "usage": {
+        "prompt_tokens": 19,
+        "completion_tokens": 10,
+        "total_tokens": 29
+      },
+      "metrics": {
+        "exact_match": true,
+        "token_f1": 1,
+        "key_point_coverage": 1
+      },
+      "attempts": 1,
+      "cache_hit": false
+    },
+    {
+      "id": "bill-02",
+      "category": "billing",
+      "question": "Do you offer invoices with a purchase order number?",
+      "reference_answer": "Yes, invoices can include a purchase order number.",
+      "status": "failed",
+      "error_class": "invalid_request",
+      "error_message": "demo: invalid_request: account is not entitled to purchase-order invoices",
+      "usage": {
+        "prompt_tokens": null,
+        "completion_tokens": null,
+        "total_tokens": null
+      },
+      "metrics": null,
+      "attempts": 1,
+      "cache_hit": false
+    },
+    {
+      "id": "data-01",
+      "category": "data",
+      "question": "How do I export my data?",
+      "reference_answer": "Export from the Data tab; the download link lasts 24 hours.",
+      "status": "succeeded",
+      "answer": "Export from the Data tab; the download link lasts 24 hours.",
+      "stop_reason": "stop",
+      "usage": {
+        "prompt_tokens": null,
+        "completion_tokens": null,
+        "total_tokens": null
+      },
+      "metrics": {
+        "exact_match": true,
+        "token_f1": 1,
+        "key_point_coverage": 1,
+        "retrieval": {
+          "recall": 1,
+          "precision": 1,
+          "matched_reference_materials": 1,
+          "reference_materials": 1,
+          "retrieved_documents": 1
+        }
+      },
+      "attempts": 1,
+      "cache_hit": false
+    },
+    {
+      "id": "data-02",
+      "category": "localization",
+      "question": "What languages does the UI support?",
+      "reference_answer": "English, Chinese, and Japanese.",
+      "status": "succeeded",
+      "answer": "English, Chinese, and Japanese.",
+      "stop_reason": "stop",
+      "usage": {
+        "prompt_tokens": null,
+        "completion_tokens": null,
+        "total_tokens": null
+      },
+      "metrics": {
+        "exact_match": true,
+        "token_f1": 1,
+        "key_point_coverage": 1
+      },
+      "attempts": 1,
+      "cache_hit": false
+    },
+    {
+      "id": "support-01",
+      "category": "support",
+      "question": "How do I contact support?",
+      "reference_answer": "Use the in-app chat or email support@example.com.",
+      "status": "succeeded",
+      "answer": "Use the in-app chat or email support@example.com.",
+      "stop_reason": "stop",
+      "usage": {
+        "prompt_tokens": null,
+        "completion_tokens": null,
+        "total_tokens": null
+      },
+      "metrics": {
+        "exact_match": true,
+        "token_f1": 1,
+        "key_point_coverage": 1
+      },
+      "attempts": 1,
+      "cache_hit": false
+    }
+  ],
+  "meta": {
+    "started_at": "2023-11-14T22:13:20Z",
+    "duration_ms": 0,
+    "target_calls": 7,
+    "cache_hits": 0,
+    "cache_misses": 7
+  }
+}

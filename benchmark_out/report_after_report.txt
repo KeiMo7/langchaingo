@@ -1,0 +1,40 @@
+Evaluation report (schema 1)
+target=demo-rag model=canned-qa-v1 prompt_version=prompt-v2
+complete=true started_at=2023-11-14T22:13:20Z duration_ms=0
+concurrency=3 timeout=1m0s max_retries=2 retry_backoff=250ms cache=true
+target_calls=7 cache_hits=0 cache_misses=7
+OVERALL samples=7 succeeded=6 failed=1 canceled=0 not_run=0
+OVERALL exact_match_rate=0.8333 token_f1=0.8333 key_point_coverage=0.8333
+OVERALL retrieval_recall=0.6667 retrieval_precision=0.5000
+OVERALL mean_prompt_tokens=20.0000 mean_completion_tokens=11.0000 mean_total_tokens=31.0000 usage_reported=2 usage_unknown=4
+OVERALL failures invalid_request=1
+CATEGORY account samples=2 succeeded=2 failed=0 canceled=0 not_run=0
+CATEGORY account exact_match_rate=0.5000 token_f1=0.5000 key_point_coverage=0.5000
+CATEGORY account retrieval_recall=0.5000 retrieval_precision=0.2500
+CATEGORY account mean_prompt_tokens=21.0000 mean_completion_tokens=12.0000 mean_total_tokens=33.0000 usage_reported=1 usage_unknown=1
+CATEGORY billing samples=2 succeeded=1 failed=1 canceled=0 not_run=0
+CATEGORY billing exact_match_rate=1.0000 token_f1=1.0000 key_point_coverage=1.0000
+CATEGORY billing retrieval_recall=unknown retrieval_precision=unknown
+CATEGORY billing mean_prompt_tokens=19.0000 mean_completion_tokens=10.0000 mean_total_tokens=29.0000 usage_reported=1 usage_unknown=0
+CATEGORY billing failures invalid_request=1
+CATEGORY data samples=1 succeeded=1 failed=0 canceled=0 not_run=0
+CATEGORY data exact_match_rate=1.0000 token_f1=1.0000 key_point_coverage=1.0000
+CATEGORY data retrieval_recall=1.0000 retrieval_precision=1.0000
+CATEGORY data mean_prompt_tokens=unknown mean_completion_tokens=unknown mean_total_tokens=unknown usage_reported=0 usage_unknown=1
+CATEGORY localization samples=1 succeeded=1 failed=0 canceled=0 not_run=0
+CATEGORY localization exact_match_rate=1.0000 token_f1=1.0000 key_point_coverage=1.0000
+CATEGORY localization retrieval_recall=unknown retrieval_precision=unknown
+CATEGORY localization mean_prompt_tokens=unknown mean_completion_tokens=unknown mean_total_tokens=unknown usage_reported=0 usage_unknown=1
+CATEGORY support samples=1 succeeded=1 failed=0 canceled=0 not_run=0
+CATEGORY support exact_match_rate=1.0000 token_f1=1.0000 key_point_coverage=1.0000
+CATEGORY support retrieval_recall=unknown retrieval_precision=unknown
+CATEGORY support mean_prompt_tokens=unknown mean_completion_tokens=unknown mean_total_tokens=unknown usage_reported=0 usage_unknown=1
+SAMPLES
+id	category	status	exact	token_f1	key_points	retrieval_recall	retrieval_precision	attempts	cache_hit
+acct-01	account	succeeded	false	0.0000	0.0000	1.0000	0.5000	1	false
+acct-02	account	succeeded	true	1.0000	1.0000	0.0000	0.0000	1	false
+bill-01	billing	succeeded	true	1.0000	1.0000	-	-	1	false
+bill-02	billing	failed	not_scored	-	-	-	-	1	false
+data-01	data	succeeded	true	1.0000	1.0000	1.0000	1.0000	1	false
+data-02	localization	succeeded	true	1.0000	1.0000	-	-	1	false
+support-01	support	succeeded	true	1.0000	1.0000	-	-	1	false

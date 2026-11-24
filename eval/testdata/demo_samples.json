@@ -1,0 +1,60 @@
+[
+  {
+    "id": "acct-01",
+    "question": "How do I reset my password?",
+    "reference_answer": "Open Settings, choose Security, and click Reset password.",
+    "reference_materials": [
+      "Settings > Security > Reset password"
+    ],
+    "key_points": ["Settings", "Security", "Reset password"],
+    "category": "account"
+  },
+  {
+    "id": "acct-02",
+    "question": "Which plans include SSO?",
+    "reference_answer": "SSO is included in the Enterprise plan only.",
+    "reference_materials": [
+      "Single sign-on (SSO) is available on the Enterprise plan."
+    ],
+    "key_points": ["SSO", "Enterprise"],
+    "category": "account"
+  },
+  {
+    "id": "bill-01",
+    "question": "What is the refund window?",
+    "reference_answer": "Refunds are available within 30 days of purchase.",
+    "key_points": ["30 days", "refund"],
+    "category": "billing"
+  },
+  {
+    "id": "bill-02",
+    "question": "Do you offer invoices with a purchase order number?",
+    "reference_answer": "Yes, invoices can include a purchase order number.",
+    "key_points": ["invoice", "purchase order"],
+    "category": "billing"
+  },
+  {
+    "id": "data-01",
+    "question": "How do I export my data?",
+    "reference_answer": "Export from the Data tab; the download link lasts 24 hours.",
+    "reference_materials": [
+      "Data tab > Export. Download links expire after 24 hours."
+    ],
+    "key_points": ["Data tab", "24 hours"],
+    "category": "data"
+  },
+  {
+    "id": "data-02",
+    "question": "What languages does the UI support?",
+    "reference_answer": "English, Chinese, and Japanese.",
+    "key_points": ["English", "Chinese", "Japanese"],
+    "category": "localization"
+  },
+  {
+    "id": "support-01",
+    "question": "How do I contact support?",
+    "reference_answer": "Use the in-app chat or email support@example.com.",
+    "key_points": ["in-app chat", "email"],
+    "category": "support"
+  }
+]

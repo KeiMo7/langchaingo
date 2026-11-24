@@ -1,0 +1,190 @@
+{
+  "comparable": true,
+  "left": {
+    "target": "demo-rag",
+    "model_id": "canned-qa-v1",
+    "prompt_version": "prompt-v1",
+    "concurrency": 3,
+    "timeout": "1m0s",
+    "max_retries": 2,
+    "retry_backoff": "250ms",
+    "cache_enabled": true
+  },
+  "right": {
+    "target": "demo-rag",
+    "model_id": "canned-qa-v1",
+    "prompt_version": "prompt-v2",
+    "concurrency": 3,
+    "timeout": "1m0s",
+    "max_retries": 2,
+    "retry_backoff": "250ms",
+    "cache_enabled": true
+  },
+  "left_complete": true,
+  "right_complete": true,
+  "exact_match_rate": {
+    "left": 1,
+    "right": 0.8333,
+    "delta": -0.1667,
+    "changed": true
+  },
+  "token_f1": {
+    "left": 1,
+    "right": 0.8333,
+    "delta": -0.1667,
+    "changed": true
+  },
+  "key_point_coverage": {
+    "left": 1,
+    "right": 0.8333,
+    "delta": -0.1667,
+    "changed": true
+  },
+  "retrieval_recall": {
+    "left": 0.6667,
+    "right": 0.6667,
+    "delta": 0,
+    "changed": false
+  },
+  "failed_left": 1,
+  "failed_right": 1,
+  "categories": [
+    {
+      "category": "account",
+      "exact_match_rate": {
+        "left": 1,
+        "right": 0.5,
+        "delta": -0.5,
+        "changed": true
+      },
+      "token_f1": {
+        "left": 1,
+        "right": 0.5,
+        "delta": -0.5,
+        "changed": true
+      },
+      "key_point_coverage": {
+        "left": 1,
+        "right": 0.5,
+        "delta": -0.5,
+        "changed": true
+      },
+      "failed_left": 0,
+      "failed_right": 0
+    },
+    {
+      "category": "billing",
+      "exact_match_rate": {
+        "left": 1,
+        "right": 1,
+        "delta": 0,
+        "changed": false
+      },
+      "token_f1": {
+        "left": 1,
+        "right": 1,
+        "delta": 0,
+        "changed": false
+      },
+      "key_point_coverage": {
+        "left": 1,
+        "right": 1,
+        "delta": 0,
+        "changed": false
+      },
+      "failed_left": 1,
+      "failed_right": 1
+    },
+    {
+      "category": "data",
+      "exact_match_rate": {
+        "left": 1,
+        "right": 1,
+        "delta": 0,
+        "changed": false
+      },
+      "token_f1": {
+        "left": 1,
+        "right": 1,
+        "delta": 0,
+        "changed": false
+      },
+      "key_point_coverage": {
+        "left": 1,
+        "right": 1,
+        "delta": 0,
+        "changed": false
+      },
+      "failed_left": 0,
+      "failed_right": 0
+    },
+    {
+      "category": "localization",
+      "exact_match_rate": {
+        "left": 1,
+        "right": 1,
+        "delta": 0,
+        "changed": false
+      },
+      "token_f1": {
+        "left": 1,
+        "right": 1,
+        "delta": 0,
+        "changed": false
+      },
+      "key_point_coverage": {
+        "left": 1,
+        "right": 1,
+        "delta": 0,
+        "changed": false
+      },
+      "failed_left": 0,
+      "failed_right": 0
+    },
+    {
+      "category": "support",
+      "exact_match_rate": {
+        "left": 1,
+        "right": 1,
+        "delta": 0,
+        "changed": false
+      },
+      "token_f1": {
+        "left": 1,
+        "right": 1,
+        "delta": 0,
+        "changed": false
+      },
+      "key_point_coverage": {
+        "left": 1,
+        "right": 1,
+        "delta": 0,
+        "changed": false
+      },
+      "failed_left": 0,
+      "failed_right": 0
+    }
+  ],
+  "changed_samples": [
+    {
+      "id": "acct-01",
+      "category": "account",
+      "left_status": "succeeded",
+      "right_status": "succeeded",
+      "left_exact_match": true,
+      "right_exact_match": false,
+      "token_f1": {
+        "left": 1,
+        "right": 0,
+        "delta": -1,
+        "changed": true
+      },
+      "key_point_coverage": {
+        "left": 1,
+        "right": 0,
+        "delta": -1,
+        "changed": true
+      }
+    }
+  ]
+}
