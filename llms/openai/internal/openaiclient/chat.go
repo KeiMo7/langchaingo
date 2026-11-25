@@ -76,6 +76,14 @@ type ChatRequest struct {
 	// Return an error to stop streaming early.
 	StreamingReasoningFunc func(ctx context.Context, reasoningChunk, chunk []byte) error `json:"-"`
 
+	// StreamingEventFunc, when set, receives provider-neutral stream events:
+	// text, reasoning and tool call increments, per-call lifecycle events
+	// and a terminal summary. It is additive: StreamingFunc, if also set,
+	// still receives the same text fragments.
+	StreamingEventFunc llms.StreamEventFunc `json:"-"`
+	// StreamingProvider names the adapter in warning logs.
+	StreamingProvider string `json:"-"`
+
 	// Deprecated: use Tools instead.
 	Functions []FunctionDefinition `json:"functions,omitempty"`
 	// Deprecated: use ToolChoice instead.
@@ -217,6 +225,10 @@ type ToolCall struct {
 	ID       string       `json:"id,omitempty"`
 	Type     ToolType     `json:"type"`
 	Function ToolFunction `json:"function,omitempty"`
+	// Index is the position of the call within the message. Streaming
+	// deltas carry it; it is the stable identity a fragmented call is
+	// assembled under. It is omitted from requests.
+	Index *int `json:"index,omitempty"`
 }
 
 type ResponseFormatJSONSchemaProperty struct {
@@ -470,6 +482,16 @@ type StreamedChatResponsePayload struct {
 	// for the entire request.
 	Usage *Usage `json:"usage,omitempty"`
 	Error error  `json:"-"` // use for error handling only
+	// Warning reports fragments the reader skipped. It carries no payload
+	// bytes, only a count, so the stream can record the gap without
+	// exposing content or failing.
+	Warning *StreamWarning `json:"-"`
+}
+
+// StreamWarning is an internal, payload-free note that the reader skipped
+// fragments it could not decode.
+type StreamWarning struct {
+	Count int
 }
 
 // FunctionDefinition is a definition of a function that can be called by the model.
@@ -505,7 +527,9 @@ type FunctionCall struct {
 }
 
 func (c *Client) createChat(ctx context.Context, payload *ChatRequest) (*ChatCompletionResponse, error) {
-	if payload.StreamingFunc != nil || payload.StreamingReasoningFunc != nil {
+	// A provider-neutral event handler streams tool calls as well as text,
+	// so it also turns streaming on.
+	if payload.StreamingFunc != nil || payload.StreamingReasoningFunc != nil || payload.StreamingEventFunc != nil {
 		payload.Stream = true
 		if payload.StreamOptions == nil {
 			payload.StreamOptions = &StreamOptions{IncludeUsage: true}
@@ -566,7 +590,7 @@ func (c *Client) createChat(ctx context.Context, payload *ChatRequest) (*ChatCom
 
 		return nil, fmt.Errorf("%s: %s", msg, errResp.Error.Message)
 	}
-	if payload.StreamingFunc != nil || payload.StreamingReasoningFunc != nil {
+	if payload.StreamingFunc != nil || payload.StreamingReasoningFunc != nil || payload.StreamingEventFunc != nil {
 		return parseStreamingChatResponse(ctx, r, payload)
 	}
 	// Parse response
@@ -584,8 +608,23 @@ func parseStreamingChatResponse(ctx context.Context, r *http.Response, payload *
 	readerCtx, cancelReader := context.WithCancel(ctx)
 	defer cancelReader()
 
+	// Close the body when the reader context is cancelled. Scan blocks in
+	// Read on a slow or stalled upstream, so the context check between
+	// lines never runs; closing the body is what unblocks it and lets the
+	// reader goroutine exit promptly on cancel or consumer error.
+	stopCloser := make(chan struct{})
+	go func() {
+		select {
+		case <-readerCtx.Done():
+			_ = r.Body.Close()
+		case <-stopCloser:
+		}
+	}()
+	defer close(stopCloser)
+
 	go func() {
 		defer close(responseChan)
+		skipNonJSON := 0
 		for scanner.Scan() {
 			// Check if context is cancelled
 			select {
@@ -622,6 +661,17 @@ func parseStreamingChatResponse(ctx context.Context, r *http.Response, payload *
 			if err != nil {
 				// Skip non-JSON data values that some providers might send
 				// This could happen if the data field contains non-JSON content
+				skipNonJSON++
+				// Report the skip immediately so a warning that occurs
+				// before [DONE] is still observed; later skips only bump
+				// the count.
+				if skipNonJSON == 1 {
+					select {
+					case <-readerCtx.Done():
+						return
+					case responseChan <- StreamedChatResponsePayload{Warning: &StreamWarning{Count: 1}}:
+					}
+				}
 				continue
 			}
 
@@ -642,72 +692,258 @@ func parseStreamingChatResponse(ctx context.Context, r *http.Response, payload *
 		}
 	}()
 	// Combine response
-	return combineStreamingChatResponse(readerCtx, payload, responseChan)
+	return combineStreamingChatResponse(readerCtx, payload, responseChan, cancelReader)
+}
+
+// streamAccumulator accumulates OpenAI fragments into the response shape and
+// drives the provider-neutral llms.Stream.
+type streamAccumulator struct {
+	payload  *ChatRequest
+	response *ChatCompletionResponse
+	stream   *llms.Stream
+
+	// functionCall accumulates the legacy function_call deltas.
+	functionCall *FunctionCall
 }
 
 func combineStreamingChatResponse(
 	ctx context.Context,
 	payload *ChatRequest,
 	responseChan chan StreamedChatResponsePayload,
+	cancelReader context.CancelFunc,
 ) (*ChatCompletionResponse, error) {
-	response := ChatCompletionResponse{
-		Choices: []*ChatCompletionChoice{
-			{},
+	acc := &streamAccumulator{
+		payload: payload,
+		response: &ChatCompletionResponse{
+			Choices: []*ChatCompletionChoice{{}},
 		},
 	}
+	acc.stream = llms.NewStream(payload.StreamingProvider, payload.StreamingEventFunc)
 
+	var streamErr error
 	for streamResponse := range responseChan {
 		if streamResponse.Error != nil {
-			return nil, streamResponse.Error
+			streamErr = streamResponse.Error
+			break
 		}
-
-		if streamResponse.Usage != nil {
-			response.Usage.CompletionTokens = streamResponse.Usage.CompletionTokens
-			response.Usage.PromptTokens = streamResponse.Usage.PromptTokens
-			response.Usage.TotalTokens = streamResponse.Usage.TotalTokens
-			response.Usage.PromptTokensDetails.AudioTokens = streamResponse.Usage.PromptTokensDetails.AudioTokens
-			response.Usage.PromptTokensDetails.CachedTokens = streamResponse.Usage.PromptTokensDetails.CachedTokens
-			response.Usage.CompletionTokensDetails.AudioTokens = streamResponse.Usage.CompletionTokensDetails.AudioTokens
-			response.Usage.CompletionTokensDetails.AcceptedPredictionTokens = streamResponse.Usage.CompletionTokensDetails.AcceptedPredictionTokens
-			response.Usage.CompletionTokensDetails.RejectedPredictionTokens = streamResponse.Usage.CompletionTokensDetails.RejectedPredictionTokens
-			response.Usage.CompletionTokensDetails.ReasoningTokens = streamResponse.Usage.CompletionTokensDetails.ReasoningTokens
-		}
-
-		if len(streamResponse.Choices) == 0 {
+		if streamResponse.Warning != nil {
+			// An undecodable fragment is recorded and skipped; the rest
+			// of the stream keeps flowing.
+			if winErr := acc.stream.Warning(ctx, llms.StreamWarning{
+				Code:   llms.StreamWarningUnknownChunk,
+				Index:  -1,
+				Detail: fmt.Sprintf("skipped %d undecodable fragment(s)", streamResponse.Warning.Count),
+			}); winErr != nil {
+				streamErr = winErr
+				break
+			}
 			continue
 		}
-		choice := streamResponse.Choices[0]
-		chunk := []byte(choice.Delta.Content)
-		reasoningChunk := []byte(choice.Delta.ReasoningContent) // TODO: not sure if there will be any reasoning related to function call later, so just pass it here
-		response.Choices[0].Message.Content += choice.Delta.Content
-		response.Choices[0].FinishReason = choice.FinishReason
-		response.Choices[0].Message.ReasoningContent += choice.Delta.ReasoningContent
-
-		if choice.Delta.FunctionCall != nil {
-			chunk = updateFunctionCall(response.Choices[0].Message, choice.Delta.FunctionCall)
+		if err := acc.consume(ctx, &streamResponse); err != nil {
+			streamErr = err
+			break
 		}
+	}
+	// Stop the reader now, before finishing: a consumer error or
+	// cancellation must not leave the producer parked on a send while the
+	// summary is assembled and delivered.
+	parentErr := ctx.Err()
+	cancelReader()
 
-		if len(choice.Delta.ToolCalls) > 0 {
-			chunk, response.Choices[0].Message.ToolCalls = updateToolCalls(response.Choices[0].Message.ToolCalls,
-				choice.Delta.ToolCalls)
+	reason := llms.StreamStopReasonComplete
+	switch {
+	case streamErr != nil:
+		reason = llms.StreamStopReasonUpstreamError
+		if isConsumerError(streamErr) {
+			reason = llms.StreamStopReasonConsumerError
 		}
+	case parentErr != nil:
+		reason = llms.StreamStopReasonCanceled
+	}
+	// Deliver the terminal summary on a live context: when the stream is
+	// ending because its own context was cancelled, the summary must still
+	// reach the observer exactly once.
+	closeCtx := ctx
+	if closeCtx.Err() != nil {
+		closeCtx = context.Background()
+	}
+	acc.stream.Close(closeCtx, reason, streamErr)
 
-		if payload.StreamingFunc != nil {
-			err := payload.StreamingFunc(ctx, chunk)
-			if err != nil {
-				return nil, fmt.Errorf("streaming func returned an error: %w", err)
-			}
+	// The assembled tool call list keeps the shape the non-streaming path
+	// returns; only structurally valid calls are exposed as executable.
+	acc.finish()
+
+	if streamErr != nil {
+		// When the parent context was cancelled, the read error is a
+		// symptom of that cancellation, not the cause. Report the
+		// cancellation so callers can tell the two apart.
+		if parentErr != nil {
+			return acc.response, parentErr
 		}
-		if payload.StreamingReasoningFunc != nil {
-			err := payload.StreamingReasoningFunc(ctx, reasoningChunk, chunk)
-			if err != nil {
-				return nil, fmt.Errorf("streaming reasoning func returned an error: %w", err)
+		return acc.response, streamErr
+	}
+	return acc.response, parentErr
+}
+
+// errConsumer is wrapped around an error returned by one of the streaming
+// callbacks, so the terminal summary can tell it apart from a transport
+// failure.
+type errConsumer struct{ err error }
+
+func (e *errConsumer) Error() string { return e.err.Error() }
+func (e *errConsumer) Unwrap() error { return e.err }
+
+func isConsumerError(err error) bool {
+	var ce *errConsumer
+	return errors.As(err, &ce)
+}
+
+func (a *streamAccumulator) consume(ctx context.Context, sr *StreamedChatResponsePayload) error {
+	if sr.Usage != nil {
+		a.response.Usage.CompletionTokens = sr.Usage.CompletionTokens
+		a.response.Usage.PromptTokens = sr.Usage.PromptTokens
+		a.response.Usage.TotalTokens = sr.Usage.TotalTokens
+		a.response.Usage.PromptTokensDetails.AudioTokens = sr.Usage.PromptTokensDetails.AudioTokens
+		a.response.Usage.PromptTokensDetails.CachedTokens = sr.Usage.PromptTokensDetails.CachedTokens
+		a.response.Usage.CompletionTokensDetails.AudioTokens = sr.Usage.CompletionTokensDetails.AudioTokens
+		a.response.Usage.CompletionTokensDetails.AcceptedPredictionTokens = sr.Usage.CompletionTokensDetails.AcceptedPredictionTokens
+		a.response.Usage.CompletionTokensDetails.RejectedPredictionTokens = sr.Usage.CompletionTokensDetails.RejectedPredictionTokens
+		a.response.Usage.CompletionTokensDetails.ReasoningTokens = sr.Usage.CompletionTokensDetails.ReasoningTokens
+	}
+
+	if len(sr.Choices) == 0 {
+		return nil
+	}
+	choice := sr.Choices[0]
+	a.response.Choices[0].FinishReason = choice.FinishReason
+	a.response.Choices[0].Message.ReasoningContent += choice.Delta.ReasoningContent
+	a.response.Choices[0].Message.Content += choice.Delta.Content
+
+	// Reasoning is delivered through the shared stream, then mirrored to
+	// the historical reasoning callback with the same pairing it always had
+	// (the reasoning fragment plus the content fragment of the delta).
+	if choice.Delta.ReasoningContent != "" {
+		if err := a.stream.Reasoning(ctx, choice.Delta.ReasoningContent); err != nil {
+			return &errConsumer{err}
+		}
+		if a.payload.StreamingReasoningFunc != nil {
+			if err := a.payload.StreamingReasoningFunc(ctx, []byte(choice.Delta.ReasoningContent), []byte(choice.Delta.Content)); err != nil {
+				return fmt.Errorf("streaming reasoning func returned an error: %w", err)
 			}
 		}
 	}
-	return &response, nil
+	// Text is delivered through the shared stream, then mirrored to the
+	// historical text callback with exactly the fragment it always got.
+	if choice.Delta.Content != "" {
+		if err := a.stream.Text(ctx, choice.Delta.Content); err != nil {
+			return &errConsumer{err}
+		}
+		if a.payload.StreamingFunc != nil {
+			if err := a.payload.StreamingFunc(ctx, []byte(choice.Delta.Content)); err != nil {
+				return fmt.Errorf("streaming func returned an error: %w", err)
+			}
+		}
+	}
+
+	if choice.Delta.FunctionCall != nil {
+		if err := a.consumeFunctionCall(ctx, choice.Delta.FunctionCall); err != nil {
+			return err
+		}
+	}
+
+	for _, tc := range choice.Delta.ToolCalls {
+		if tc == nil {
+			continue
+		}
+		if err := a.stream.AddToolCall(ctx, deltaFromToolCall(tc)); err != nil {
+			return &errConsumer{err}
+		}
+	}
+	return nil
 }
 
+// deltaFromToolCall maps one OpenAI tool call fragment to the neutral form.
+// The position comes from the delta's index; the type field is incidental and
+// is never used to decide whether the fragment opens a new call.
+func deltaFromToolCall(tc *ToolCall) llms.ToolCallDelta {
+	idx := 0
+	if tc.Index != nil {
+		idx = *tc.Index
+	}
+	return llms.ToolCallDelta{
+		Index:     idx,
+		ID:        tc.ID,
+		Name:      tc.Function.Name,
+		Type:      string(tc.Type),
+		Arguments: tc.Function.Arguments,
+	}
+}
+
+// consumeFunctionCall handles the legacy function_call delta. It is assembled
+// and validated like a tool call, under the reserved negative position, and
+// still delivered to the historical callback as an incrementally grown JSON
+// object so that path is unchanged.
+func (a *streamAccumulator) consumeFunctionCall(ctx context.Context, fc *FunctionCall) error {
+	if a.functionCall == nil {
+		a.functionCall = &FunctionCall{Name: fc.Name}
+	} else if fc.Name != "" {
+		a.functionCall.Name = fc.Name
+	}
+	a.functionCall.Arguments += fc.Arguments
+	if err := a.stream.AddToolCall(ctx, llms.ToolCallDelta{
+		Index:     legacyFunctionCallIndex,
+		Name:      a.functionCall.Name,
+		Arguments: fc.Arguments,
+	}); err != nil {
+		return &errConsumer{err}
+	}
+	if a.payload.StreamingFunc != nil {
+		chunk := updateFunctionCall(a.response.Choices[0].Message, fc)
+		if err := a.payload.StreamingFunc(ctx, chunk); err != nil {
+			return fmt.Errorf("streaming func returned an error: %w", err)
+		}
+	}
+	return nil
+}
+
+// legacyFunctionCallIndex is the reserved position of the legacy
+// function_call, which has no index on the wire.
+const legacyFunctionCallIndex = -1
+
+// finish copies the assembled tool calls into the response.
+func (a *streamAccumulator) finish() {
+	assembled := a.stream.Assembled()
+	a.response.Choices[0].Message.ToolCalls = nil
+	for _, ac := range assembled {
+		c := ac.ToolCall
+		if c.FunctionCall == nil {
+			continue
+		}
+		// The legacy function_call is surfaced through Message.FunctionCall
+		// only, exactly as before, not as an entry in ToolCalls.
+		if ac.Status.Index == legacyFunctionCallIndex {
+			continue
+		}
+		if ac.Status.State != llms.ToolCallStateComplete {
+			continue
+		}
+		a.response.Choices[0].Message.ToolCalls = append(a.response.Choices[0].Message.ToolCalls, ToolCall{
+			ID:   c.ID,
+			Type: ToolType(c.Type),
+			Function: ToolFunction{
+				Name:      c.FunctionCall.Name,
+				Arguments: c.FunctionCall.Arguments,
+			},
+		})
+	}
+	if a.functionCall != nil {
+		a.response.Choices[0].Message.FunctionCall = a.functionCall
+	}
+}
+
+// updateFunctionCall appends a legacy function_call delta to the message and
+// returns the incrementally grown call as JSON, which is what the historical
+// streaming callback receives on that path.
 func updateFunctionCall(message ChatMessage, functionCall *FunctionCall) []byte {
 	if message.FunctionCall == nil {
 		message.FunctionCall = functionCall
@@ -716,31 +952,6 @@ func updateFunctionCall(message ChatMessage, functionCall *FunctionCall) []byte 
 	}
 	chunk, _ := json.Marshal(message.FunctionCall) // nolint:errchkjson
 	return chunk
-}
-
-func updateToolCalls(tools []ToolCall, delta []*ToolCall) ([]byte, []ToolCall) {
-	if len(delta) == 0 {
-		return []byte{}, tools
-	}
-	for _, t := range delta {
-		// if we have arguments append to the last Tool call
-		if t.Type == `` && t.Function.Arguments != `` {
-			lindex := len(tools) - 1
-			if lindex < 0 {
-				continue
-			}
-
-			tools[lindex].Function.Arguments += t.Function.Arguments
-			continue
-		}
-
-		// Otherwise, this is a new tool call, append that to the stack
-		tools = append(tools, *t)
-	}
-
-	chunk, _ := json.Marshal(delta) // nolint:errchkjson
-
-	return chunk, tools
 }
 
 // StreamingChatResponseTools is a helper function to append tool calls to the stack.

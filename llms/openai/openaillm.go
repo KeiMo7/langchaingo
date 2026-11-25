@@ -262,6 +262,8 @@ func (o *LLM) GenerateContent(ctx context.Context, messages []llms.MessageConten
 		Messages:               chatMsgs,
 		StreamingFunc:          opts.StreamingFunc,
 		StreamingReasoningFunc: opts.StreamingReasoningFunc,
+		StreamingEventFunc:     opts.StreamingEventFunc,
+		StreamingProvider:      "openai",
 		Temperature:            opts.Temperature,
 		N:                      opts.N,
 		FrequencyPenalty:       opts.FrequencyPenalty,
@@ -326,6 +328,15 @@ func (o *LLM) GenerateContent(ctx context.Context, messages []llms.MessageConten
 
 	result, err := o.client.CreateChat(ctx, req)
 	if err != nil {
+		// A streaming call that failed partway still hands back whatever
+		// it accumulated: the error explains the interruption, but the
+		// text and complete tool calls already produced are not lost.
+		if partial := partialContentResponse(result); partial != nil {
+			if o.CallbacksHandler != nil {
+				o.CallbacksHandler.HandleLLMError(ctx, err)
+			}
+			return partial, err
+		}
 		return nil, err
 	}
 	if len(result.Choices) == 0 {
@@ -382,6 +393,38 @@ func (o *LLM) GenerateContent(ctx context.Context, messages []llms.MessageConten
 		o.CallbacksHandler.HandleLLMGenerateContentEnd(ctx, response)
 	}
 	return response, nil
+}
+
+// partialContentResponse converts a partially accumulated stream result into
+// the public response shape. It returns nil when nothing was produced, so a
+// call that failed before any output still returns a nil response.
+func partialContentResponse(result *openaiclient.ChatCompletionResponse) *llms.ContentResponse {
+	if result == nil || len(result.Choices) == 0 {
+		return nil
+	}
+	c := result.Choices[0]
+	if c.Message.Content == "" && c.Message.ReasoningContent == "" && len(c.Message.ToolCalls) == 0 {
+		return nil
+	}
+	choice := &llms.ContentChoice{
+		Content:          c.Message.Content,
+		ReasoningContent: c.Message.ReasoningContent,
+		StopReason:       fmt.Sprint(c.FinishReason),
+	}
+	for _, tc := range c.Message.ToolCalls {
+		choice.ToolCalls = append(choice.ToolCalls, llms.ToolCall{
+			ID:   tc.ID,
+			Type: string(tc.Type),
+			FunctionCall: &llms.FunctionCall{
+				Name:      tc.Function.Name,
+				Arguments: tc.Function.Arguments,
+			},
+		})
+	}
+	if len(choice.ToolCalls) > 0 {
+		choice.FuncCall = choice.ToolCalls[0].FunctionCall
+	}
+	return &llms.ContentResponse{Choices: []*llms.ContentChoice{choice}}
 }
 
 // SupportsReasoning implements the ReasoningModel interface.

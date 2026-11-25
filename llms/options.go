@@ -24,6 +24,14 @@ type CallOptions struct {
 	// StreamingReasoningFunc is a function to be called for each chunk of a streaming response.
 	// Return an error to stop streaming early.
 	StreamingReasoningFunc func(ctx context.Context, reasoningChunk, chunk []byte) error `json:"-"`
+	// StreamingEventFunc, when set, receives every increment of a streaming
+	// response - text, reasoning and tool calls - as provider-neutral
+	// StreamEvents, in arrival order, plus per-call lifecycle events and a
+	// terminal summary. It is additive: StreamingFunc, if also set, keeps
+	// receiving text fragments unchanged. Return an error to stop streaming
+	// early; the error is returned from the model call together with the
+	// partial result.
+	StreamingEventFunc StreamEventFunc `json:"-"`
 	// TopK is the number of tokens to consider for top-k sampling.
 	TopK int `json:"top_k"`
 	// TopP is the cumulative probability for top-p sampling.

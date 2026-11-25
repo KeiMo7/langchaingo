@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/tmc/langchaingo/httputil"
+	"github.com/tmc/langchaingo/llms"
 )
 
 const (
@@ -157,6 +158,9 @@ type MessageRequest struct {
 	BetaHeaders            []string                                                      `json:"-"`
 	StreamingFunc          func(ctx context.Context, chunk []byte) error                 `json:"-"`
 	StreamingReasoningFunc func(ctx context.Context, reasoningChunk, chunk []byte) error `json:"-"`
+	// StreamingEventFunc receives provider-neutral events, including tool
+	// call increments. It is additive and optional.
+	StreamingEventFunc llms.StreamEventFunc `json:"-"`
 }
 
 // CreateMessage creates message for the messages api.
@@ -175,6 +179,8 @@ func (c *Client) CreateMessage(ctx context.Context, r *MessageRequest) (*Message
 		OutputConfig:           r.OutputConfig,
 		StreamingFunc:          r.StreamingFunc,
 		StreamingReasoningFunc: r.StreamingReasoningFunc,
+		StreamingEventFunc:     r.StreamingEventFunc,
+		StreamingProvider:      "anthropic",
 	}, r.BetaHeaders)
 	if err != nil {
 		return nil, err

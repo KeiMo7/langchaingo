@@ -11,6 +11,8 @@ import (
 	"log"
 	"net/http"
 	"strings"
+
+	"github.com/tmc/langchaingo/llms"
 )
 
 var (
@@ -54,6 +56,11 @@ type messagePayload struct {
 
 	StreamingFunc          func(ctx context.Context, chunk []byte) error                 `json:"-"`
 	StreamingReasoningFunc func(ctx context.Context, reasoningChunk, chunk []byte) error `json:"-"`
+	// StreamingEventFunc receives provider-neutral events, including tool
+	// call increments, from the same stream. It is additive.
+	StreamingEventFunc llms.StreamEventFunc `json:"-"`
+	// StreamingProvider names the adapter in warning logs.
+	StreamingProvider string `json:"-"`
 }
 
 // ThinkingConfig represents the thinking configuration for Claude 3.7+.
@@ -308,9 +315,34 @@ func parseStreamingMessageResponse(ctx context.Context, r *http.Response, payloa
 	scanner := bufio.NewScanner(r.Body)
 	eventChan := make(chan MessageEvent)
 
+	// readerCtx is cancelled when this function returns, so a producer
+	// still parked on a send unparks instead of leaking. It is a child of
+	// ctx only to carry the deadline, not to write to it.
+	readerCtx, cancelReader := context.WithCancel(ctx)
+	defer cancelReader()
+
+	// toolStream assembles tool call fragments and reports them as
+	// provider-neutral events. It exists only when a handler was set, so
+	// the historical text path is untouched when the new capability is not
+	// used.
+	var toolStream *llms.Stream
+	if payload.StreamingEventFunc != nil {
+		toolStream = llms.NewStream(payload.StreamingProvider, payload.StreamingEventFunc)
+	}
+
 	go func() {
 		defer close(eventChan)
 		var response MessageResponsePayload
+		// Publish the accumulated response once the reader stops, so a
+		// stream that ends without message_stop still returns its partial
+		// result instead of nothing. The send is cancelled when the
+		// consumer returns, so it cannot park the producer.
+		defer func() {
+			select {
+			case eventChan <- MessageEvent{Response: &response}:
+			case <-readerCtx.Done():
+			}
+		}()
 		for scanner.Scan() {
 			line := scanner.Text()
 			if line == "" || !strings.HasPrefix(line, "data:") {
@@ -319,26 +351,54 @@ func parseStreamingMessageResponse(ctx context.Context, r *http.Response, payloa
 			data := strings.TrimPrefix(line, "data: ")
 			event, err := parseStreamEvent(data)
 			if err != nil {
-				eventChan <- MessageEvent{Response: nil, Err: fmt.Errorf("failed to parse stream event: %w", err)}
+				select {
+				case eventChan <- MessageEvent{Response: nil, Err: fmt.Errorf("failed to parse stream event: %w", err)}:
+				case <-readerCtx.Done():
+				}
 				return
 			}
-			response, err = processStreamEvent(ctx, event, payload, response, eventChan)
+			response, err = processStreamEvent(readerCtx, event, payload, response, eventChan, toolStream)
 			if err != nil {
-				eventChan <- MessageEvent{Response: nil, Err: fmt.Errorf("failed to process stream event: %w", err)}
+				select {
+				case eventChan <- MessageEvent{Response: nil, Err: fmt.Errorf("failed to process stream event: %w", err)}:
+				case <-readerCtx.Done():
+				}
 				return
 			}
 		}
 		if err := scanner.Err(); err != nil {
-			eventChan <- MessageEvent{Response: nil, Err: fmt.Errorf("issue scanning response: %w", err)}
+			select {
+			case eventChan <- MessageEvent{Response: nil, Err: fmt.Errorf("issue scanning response: %w", err)}:
+			case <-readerCtx.Done():
+			}
 		}
 	}()
 
 	var lastResponse *MessageResponsePayload
+	var streamErr error
 	for event := range eventChan {
 		if event.Err != nil {
-			return nil, event.Err
+			streamErr = event.Err
+			break
 		}
 		lastResponse = event.Response
+	}
+	if toolStream != nil {
+		// Deliver the terminal summary once, on a live context so a
+		// cancellation does not suppress it.
+		reason := llms.StreamStopReasonComplete
+		closeCtx := ctx
+		switch {
+		case streamErr != nil:
+			reason = llms.StreamStopReasonUpstreamError
+		case ctx.Err() != nil:
+			reason = llms.StreamStopReasonCanceled
+			closeCtx = context.Background()
+		}
+		toolStream.Close(closeCtx, reason, streamErr)
+	}
+	if streamErr != nil {
+		return lastResponse, streamErr
 	}
 	return lastResponse, nil
 }
@@ -349,7 +409,7 @@ func parseStreamEvent(data string) (map[string]interface{}, error) {
 	return event, err
 }
 
-func processStreamEvent(ctx context.Context, event map[string]interface{}, payload *messagePayload, response MessageResponsePayload, eventChan chan<- MessageEvent) (MessageResponsePayload, error) {
+func processStreamEvent(ctx context.Context, event map[string]interface{}, payload *messagePayload, response MessageResponsePayload, eventChan chan<- MessageEvent, toolStream *llms.Stream) (MessageResponsePayload, error) {
 	eventType, ok := event["type"].(string)
 	if !ok {
 		return response, ErrInvalidEventType
@@ -358,21 +418,35 @@ func processStreamEvent(ctx context.Context, event map[string]interface{}, paylo
 	case "message_start":
 		return handleMessageStartEvent(event, response)
 	case "content_block_start":
-		return handleContentBlockStartEvent(event, response)
+		return handleContentBlockStartEvent(ctx, event, response, toolStream)
 	case "content_block_delta":
-		return handleContentBlockDeltaEvent(ctx, event, response, payload)
+		return handleContentBlockDeltaEvent(ctx, event, response, payload, toolStream)
 	case "content_block_stop":
 		return handleContentBlockStop(event, response)
 	case "message_delta":
 		return handleMessageDeltaEvent(event, response)
 	case "message_stop":
-		eventChan <- MessageEvent{Response: &response, Err: nil}
+		select {
+		case eventChan <- MessageEvent{Response: &response, Err: nil}:
+		case <-ctx.Done():
+		}
 	case "ping":
 		// Nothing to do here
 	case "error":
 		return response, fmt.Errorf("received error event: %v", event)
 	default:
 		log.Printf("unknown event type: %s - %v", eventType, event)
+		if toolStream != nil {
+			// Record the unknown chunk without failing the stream, so an
+			// observer can tell a gap from a silent one.
+			if err := toolStream.Warning(ctx, llms.StreamWarning{
+				Code:   llms.StreamWarningUnknownChunk,
+				Index:  -1,
+				Detail: "event type " + eventType,
+			}); err != nil {
+				return response, err
+			}
+		}
 	}
 	return response, nil
 }
@@ -410,7 +484,7 @@ func handleMessageStartEvent(event map[string]interface{}, response MessageRespo
 	return response, nil
 }
 
-func handleContentBlockStartEvent(event map[string]interface{}, response MessageResponsePayload) (MessageResponsePayload, error) {
+func handleContentBlockStartEvent(ctx context.Context, event map[string]interface{}, response MessageResponsePayload, toolStream *llms.Stream) (MessageResponsePayload, error) {
 	indexValue, ok := event["index"].(float64)
 	if !ok {
 		return response, ErrInvalidIndexField
@@ -464,7 +538,7 @@ func handleContentBlockStartEvent(event map[string]interface{}, response Message
 }
 
 // handleContentBlockDeltaEvent processes delta events for content blocks, handling both text and JSON deltas.
-func handleContentBlockDeltaEvent(ctx context.Context, event map[string]interface{}, response MessageResponsePayload, payload *messagePayload) (MessageResponsePayload, error) {
+func handleContentBlockDeltaEvent(ctx context.Context, event map[string]interface{}, response MessageResponsePayload, payload *messagePayload, toolStream *llms.Stream) (MessageResponsePayload, error) {
 	indexValue, ok := event["index"].(float64)
 	if !ok {
 		return response, ErrInvalidIndexField
@@ -486,18 +560,18 @@ func handleContentBlockDeltaEvent(ctx context.Context, event map[string]interfac
 
 	switch deltaType {
 	case "text_delta":
-		return handleTextDelta(ctx, delta, response, payload, index)
+		return handleTextDelta(ctx, delta, response, payload, index, toolStream)
 	case "input_json_delta":
-		return handleJSONDelta(delta, response, index)
+		return handleJSONDelta(ctx, delta, response, index, toolStream)
 	case "thinking_delta":
-		return handleThinkingDelta(ctx, delta, response, payload, index)
+		return handleThinkingDelta(ctx, delta, response, payload, index, toolStream)
 	}
 
 	return response, nil
 }
 
 // handleTextDelta processes text delta events for content blocks.
-func handleTextDelta(ctx context.Context, delta map[string]interface{}, response MessageResponsePayload, payload *messagePayload, index int) (MessageResponsePayload, error) {
+func handleTextDelta(ctx context.Context, delta map[string]interface{}, response MessageResponsePayload, payload *messagePayload, index int, toolStream *llms.Stream) (MessageResponsePayload, error) {
 	text, ok := delta["text"].(string)
 	if !ok {
 		return response, ErrInvalidDeltaTextField
@@ -508,7 +582,15 @@ func handleTextDelta(ctx context.Context, delta map[string]interface{}, response
 	}
 	textContent.Text += text
 
-	// Streaming functions only work with text deltas.
+	if toolStream != nil {
+		if err := toolStream.Text(ctx, text); err != nil {
+			return response, err
+		}
+	}
+	// Streaming functions only work with text deltas. When a provider-
+	// neutral handler is set it already receives the same text as an
+	// event, but the historical callback still gets it here so its
+	// behavior is unchanged.
 	if payload.StreamingFunc != nil {
 		err := payload.StreamingFunc(ctx, []byte(text))
 		if err != nil {
@@ -520,7 +602,7 @@ func handleTextDelta(ctx context.Context, delta map[string]interface{}, response
 }
 
 // handleJSONDelta processes JSON delta events for content blocks.
-func handleJSONDelta(delta map[string]interface{}, response MessageResponsePayload, index int) (MessageResponsePayload, error) {
+func handleJSONDelta(ctx context.Context, delta map[string]interface{}, response MessageResponsePayload, index int, toolStream *llms.Stream) (MessageResponsePayload, error) {
 	partialJSON, ok := delta["partial_json"].(string)
 	if !ok {
 		return response, ErrInvalidDeltaPartialJSONField
@@ -530,12 +612,24 @@ func handleJSONDelta(delta map[string]interface{}, response MessageResponsePaylo
 		return response, ErrFailedCastToToolUseContent
 	}
 	toolUseContent.inputData += partialJSON
+	if toolStream != nil && partialJSON != "" {
+		// The block index is the position, the tool_use id the identity.
+		if err := toolStream.AddToolCall(ctx, llms.ToolCallDelta{
+			Index:     index,
+			ID:        toolUseContent.ID,
+			Name:      toolUseContent.Name,
+			Type:      "tool_use",
+			Arguments: partialJSON,
+		}); err != nil {
+			return response, err
+		}
+	}
 
 	return response, nil
 }
 
 // handleThinkingDelta processes thinking delta events for content blocks.
-func handleThinkingDelta(ctx context.Context, delta map[string]interface{}, response MessageResponsePayload, payload *messagePayload, index int) (MessageResponsePayload, error) {
+func handleThinkingDelta(ctx context.Context, delta map[string]interface{}, response MessageResponsePayload, payload *messagePayload, index int, toolStream *llms.Stream) (MessageResponsePayload, error) {
 	thinking, ok := delta["thinking"].(string)
 	if !ok {
 		return response, ErrInvalidDeltaTextField
@@ -546,6 +640,11 @@ func handleThinkingDelta(ctx context.Context, delta map[string]interface{}, resp
 	}
 	thinkingContent.Thinking += thinking
 
+	if toolStream != nil {
+		if err := toolStream.Reasoning(ctx, thinking); err != nil {
+			return response, err
+		}
+	}
 	// Call StreamingReasoningFunc if provided (similar to OpenAI pattern)
 	if payload.StreamingReasoningFunc != nil {
 		reasoningChunk := []byte(thinking)

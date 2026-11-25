@@ -166,6 +166,11 @@ func (c *Client) CreateChat(ctx context.Context, r *ChatRequest) (*ChatCompletio
 	}
 	resp, err := c.createChat(ctx, r)
 	if err != nil {
+		// A streaming call that failed partway returns the partial result
+		// alongside the error, so work already produced is not lost.
+		if resp != nil && len(resp.Choices) > 0 {
+			return resp, err
+		}
 		return nil, err
 	}
 	if len(resp.Choices) == 0 {

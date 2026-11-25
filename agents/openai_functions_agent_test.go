@@ -2,14 +2,18 @@ package agents_test
 
 import (
 	"context"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"github.com/tmc/langchaingo/agents"
+	"github.com/tmc/langchaingo/callbacks"
 	"github.com/tmc/langchaingo/chains"
 	"github.com/tmc/langchaingo/internal/httprr"
 	"github.com/tmc/langchaingo/llms"
@@ -212,4 +216,89 @@ func TestOpenAIFunctionsAgent_ParseOutput_MultipleToolCalls(t *testing.T) {
 	if len(actions) != 2 {
 		t.Errorf("expected 2 actions, got %d", len(actions))
 	}
+}
+
+// scriptedSSE serves one fixed SSE script for every request. Multiple
+// requests (one per agent iteration) replay the same script, so a test can
+// drive a full agent loop deterministically without a provider.
+func scriptedSSE(t *testing.T, events []string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "no flusher", http.StatusInternalServerError)
+			return
+		}
+		for _, ev := range events {
+			_, _ = io.WriteString(w, "data: "+ev+"\n\n")
+			flusher.Flush()
+		}
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func chunk(delta string) string {
+	return `{"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":` + delta + `,"finish_reason":null}]}`
+}
+
+type countingTool struct {
+	name  string
+	calls atomic.Int32
+}
+
+func (c *countingTool) Name() string        { return c.name }
+func (c *countingTool) Description() string { return "test tool " + c.name }
+func (c *countingTool) Call(_ context.Context, input string) (string, error) {
+	c.calls.Add(1)
+	return "ok:" + input, nil
+}
+
+// TestOpenAIFunctionsAgentStreamsToolCalls drives the agent over a scripted
+// SSE stream whose tool call arguments arrive in fragments. The assembled
+// call must reach the agent loop and the tool must run.
+func TestOpenAIFunctionsAgentStreamsToolCalls(t *testing.T) {
+	t.Parallel()
+	srv := scriptedSSE(t, []string{
+		chunk(`{"role":"assistant","content":"calling"}`),
+		chunk(`{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"demo","arguments":""}}]}`),
+		// Fragments split mid-arguments, with no type field on continuation.
+		chunk(`{"tool_calls":[{"index":0,"function":{"arguments":"{\"__arg1\":"}}]}`),
+		chunk(`{"tool_calls":[{"index":0,"function":{"arguments":"\"7*6\"}"}}]}`),
+		chunk(`{"finish_reason":"tool_calls"}`),
+	})
+	llm, err := openai.New(openai.WithToken("k"), openai.WithBaseURL(srv.URL), openai.WithModel("m"))
+	require.NoError(t, err)
+
+	demo := &countingTool{name: "demo"}
+	ag := agents.NewOpenAIFunctionsAgent(llm, []tools.Tool{demo})
+	// A callbacks handler is what makes the agent install its streaming
+	// callback; without one it does not stream at all.
+	ag.CallbacksHandler = callbacks.SimpleHandler{}
+	ex := agents.NewExecutor(ag, agents.WithMaxIterations(1))
+
+	_, _ = chains.Run(context.Background(), ex, "compute")
+	require.Equal(t, int32(1), demo.calls.Load(), "streamed tool call was not executed exactly once")
+}
+
+// TestOpenAIFunctionsAgentTruncatedToolCallNotExecuted shows that a call whose
+// arguments never parse is never handed to a tool.
+func TestOpenAIFunctionsAgentTruncatedToolCallNotExecuted(t *testing.T) {
+	t.Parallel()
+	srv := scriptedSSE(t, []string{
+		chunk(`{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"demo","arguments":"{\"__arg1\":"}}]}`),
+		chunk(`{"finish_reason":"tool_calls"}`),
+	})
+	llm, err := openai.New(openai.WithToken("k"), openai.WithBaseURL(srv.URL), openai.WithModel("m"))
+	require.NoError(t, err)
+
+	demo := &countingTool{name: "demo"}
+	ag := agents.NewOpenAIFunctionsAgent(llm, []tools.Tool{demo})
+	ag.CallbacksHandler = callbacks.SimpleHandler{}
+	ex := agents.NewExecutor(ag, agents.WithMaxIterations(1))
+	_, _ = chains.Run(context.Background(), ex, "compute")
+	require.Equal(t, int32(0), demo.calls.Load(), "truncated tool call must not execute")
 }

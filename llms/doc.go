@@ -16,4 +16,22 @@
 // The `llms.go` file contains the types and interfaces for interacting with different LLMs.
 //
 // The `options.go` file provides various options and functions to configure the LLMs.
+//
+// # Streaming
+//
+// A model call may stream its response. The historical text-only callback,
+// StreamingFunc, keeps its behavior: text fragments arrive in order, never
+// empty and never repeated. Tool calls need more than text, so an optional,
+// additive callback exists alongside it: WithStreamingHandler installs a
+// StreamEventFunc that receives text, reasoning and tool call increments from
+// the same stream, with the same delivery semantics, plus per-call lifecycle
+// events and a terminal summary.
+//
+// Tool calls are assembled by identity - position plus identifier - so
+// fragments that arrive interleaved, out of order in their arguments, or
+// re-sent cumulatively converge on one call. A call is marked complete, and
+// only then executable, when its arguments parse structurally. Provider
+// adapters translate their wire format into ToolCallDelta and feed a Stream;
+// everything above the adapter sees the same events and the same assembled
+// result.
 package llms

@@ -177,6 +177,7 @@ func generateMessagesContent(ctx context.Context, o *LLM, messages []llms.Messag
 		BetaHeaders:            betaHeaders,
 		StreamingFunc:          opts.StreamingFunc,
 		StreamingReasoningFunc: opts.StreamingReasoningFunc,
+		StreamingEventFunc:     opts.StreamingEventFunc,
 	})
 	if err != nil {
 		if o.CallbacksHandler != nil {
